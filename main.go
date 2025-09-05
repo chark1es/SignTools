@@ -60,6 +60,50 @@ var formNames = assets.FormNames{
 	FormBundleName:      "bundle_name",
 }
 
+// getConfigFilePath checks for SIGNER_CONFIG_PATH environment variable
+// and returns the appropriate config file path with logging
+func getConfigFilePath(defaultPath string) string {
+	envPath := os.Getenv("SIGNER_CONFIG_PATH")
+	if envPath != "" {
+		// Validate that the config file exists
+		if _, err := os.Stat(envPath); err != nil {
+			if os.IsNotExist(err) {
+				log.Fatal().Str("path", envPath).Msg("config file specified by SIGNER_CONFIG_PATH does not exist")
+			} else {
+				log.Fatal().Err(err).Str("path", envPath).Msg("error accessing config file specified by SIGNER_CONFIG_PATH")
+			}
+		}
+		log.Info().Str("path", envPath).Msg("using config file from SIGNER_CONFIG_PATH environment variable")
+		return envPath
+	}
+
+	log.Info().Str("path", defaultPath).Msg("using default config file path")
+	return defaultPath
+}
+
+// overrideSaveDirFromEnv checks for SAVE_DIR_PATH environment variable
+// and overrides the config save directory if set
+func overrideSaveDirFromEnv() {
+	envPath := os.Getenv("SAVE_DIR_PATH")
+	if envPath != "" {
+		// Validate that the directory exists or can be created
+		if err := os.MkdirAll(envPath, 0700); err != nil {
+			log.Fatal().Err(err).Str("path", envPath).Msg("cannot create save directory specified by SAVE_DIR_PATH")
+		}
+
+		// Check if directory is accessible
+		if _, err := os.Stat(envPath); err != nil {
+			log.Fatal().Err(err).Str("path", envPath).Msg("error accessing save directory specified by SAVE_DIR_PATH")
+		}
+
+		originalPath := config.Current.SaveDir
+		config.Current.SaveDir = envPath
+		log.Info().Str("original_path", originalPath).Str("new_path", envPath).Msg("save directory overridden by SAVE_DIR_PATH environment variable")
+	} else {
+		log.Info().Str("path", config.Current.SaveDir).Msg("using save directory from configuration file")
+	}
+}
+
 func main() {
 	host := flag.String("host", "", "Listen host, empty for all")
 	port := flag.Uint64("port", 8080, "Listen port")
@@ -77,7 +121,14 @@ func main() {
 		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 	}
 
-	config.Load(*configFile)
+	// Check for environment variable override for config file path
+	finalConfigFile := getConfigFilePath(*configFile)
+
+	config.Load(finalConfigFile)
+
+	// Check for environment variable override for save directory
+	overrideSaveDirFromEnv()
+
 	storage.Load()
 	switch {
 	case *ngrokHost != "":
@@ -113,11 +164,19 @@ func serve(host string, port uint64) {
 		}
 	}()
 
+	// Log detected builders
+	builderNames := make([]string, 0, len(config.Current.Builder))
+	for builderName := range config.Current.Builder {
+		builderNames = append(builderNames, builderName)
+	}
+	log.Info().Strs("builders", builderNames).Msg("detected and initializing builders")
+
 	log.Info().Msg("setting builder secrets")
-	for _, builder := range config.Current.Builder {
+	for builderName, builder := range config.Current.Builder {
 		if err := setBuilderSecrets(builder); err != nil {
-			log.Fatal().Err(err).Send()
+			log.Fatal().Err(err).Str("builder", builderName).Msg("failed to set builder secrets")
 		}
+		log.Info().Str("builder", builderName).Msg("builder secrets configured successfully")
 	}
 
 	e := echo.New()

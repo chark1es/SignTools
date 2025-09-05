@@ -13,5 +13,10 @@ WORKDIR /
 
 COPY --from=builder "/src/SignTools" "/"
 
+# Environment variables for configuration paths
+# SIGNER_CONFIG_PATH: Path to the signer-cfg.yml configuration file (optional)
+# SAVE_DIR_PATH: Path to the directory where signed apps will be saved (optional)
+# If not set, the application will use default paths
+
 ENTRYPOINT ["/SignTools"]
 EXPOSE 8080
